@@ -232,7 +232,7 @@ void serialin(USART_TypeDef* uart, unsigned int intr)
 	mkfifo("/dev/tty0/in", 0);
 	fd = open("/dev/tty0/in", 0);
 
-    USART_ITConfig(USART2, USART_IT_RXNE, ENABLE);
+	USART_ITConfig(USART2, USART_IT_RXNE, ENABLE);
 
 	while (1) {
 		interrupt_wait(intr);
@@ -242,7 +242,7 @@ void serialin(USART_TypeDef* uart, unsigned int intr)
 		}
 	}
 }
-
+/*
 void greeting()
 {
 	int fdout = open("/dev/tty0/out", 0);
@@ -265,6 +265,7 @@ void echo()
 		write(fdout, &c, 1);
 	}
 }
+*/
 
 void rs232_xmit_msg_task()
 {
@@ -290,85 +291,113 @@ void rs232_xmit_msg_task()
 	}
 }
 
-void queue_str_task(const char *str, int delay)
+#define COMMAND_MAX_STRING_LENGTH (128)
+#define TERMINAL_PREFIX ("$")
+#define TERMINAL_RESET_CURSOR ("\n\r")
+#define STRING_HELLO ("Hello World\n\r")
+#define STRING_INVALID_COMMAND ("Error. Invalid command\n\r")
+
+void _parse_and_process_command(char* command)
 {
-	int fdout = mq_open("/tmp/mqueue/out", 0);
-	int msg_len = strlen(str) + 1;
+	int fdout;
+	char *arguments;
 
-	while (1) {
-		/* Post the message.  Keep on trying until it is successful. */
-		write(fdout, str, msg_len);
+	fdout = open("/dev/tty0/out", 0);
 
-		/* Wait. */
-		sleep(delay);
+	arguments = command;
+	while(*arguments != ' ' && *arguments != '\n'){
+		/*if(*arguments == ' ')
+		{
+			*arguments = '\0';
+			write(fdout, "read space\n\r", 12);
+			break;
+		}
+		else if( *arguments == '\0')
+		{
+			write(fdout, "read null\n\r", 11);
+			break;
+		}*/
+		++arguments;
 	}
+	*arguments = '\0'; // saperate the command and arguments
+	++arguments; // point to correct position
+
+	if(strcmp(command, "echo") == 0)
+	{
+		  write(fdout, arguments, strlen(arguments));
+		  write(fdout, "\r", 1);
+	}
+	else if(strcmp(command, "hello") == 0)
+	{
+		  write(fdout, STRING_HELLO, strlen(STRING_HELLO));
+	}
+	else
+	{
+		  write(fdout, STRING_INVALID_COMMAND, strlen(STRING_INVALID_COMMAND));
+	}
+
+	//TODO : can not reference close
+	//close(fdout);
 }
 
-void queue_str_task1()
-{
-	queue_str_task("Hello 1\n", 200);
-}
-
-void queue_str_task2()
-{
-	queue_str_task("Hello 2\n", 50);
-}
-
-void serial_readwrite_task()
+void terminal_task()
 {
 	int fdout, fdin;
-	char str[100];
+	char command[COMMAND_MAX_STRING_LENGTH];
 	char ch;
-	int curr_char;
-	int done;
+	int buffer_index;
+	int continue_read;
 
-	fdout = mq_open("/tmp/mqueue/out", 0);
+	//TODO : Do we need a msg queue here? or direct device access is okay?
+	// is there a tty dev lock?
+	fdout = open("/dev/tty0/out", 0);
 	fdin = open("/dev/tty0/in", 0);
+	
+	while(1){
+ 		buffer_index = 0;
+		continue_read = 1;
 
-	/* Prepare the response message to be queued. */
-	memcpy(str, "Got:", 4);
+		write(fdout, TERMINAL_PREFIX, 1);
 
-	while (1) {
-		curr_char = 4;
-		done = 0;
-		do {
-			/* Receive a byte from the RS232 port (this call will
-			 * block). */
+		while(continue_read){
+			// Receive a byte from the RS232 port (this call will block). 
 			read(fdin, &ch, 1);
-
-			/* If the byte is an end-of-line type character, then
-			 * finish the string and inidcate we are done.
-			 */
-			if (curr_char >= 98 || (ch == '\r') || (ch == '\n')) {
-				str[curr_char] = '\n';
-				str[curr_char+1] = '\0';
-				done = -1;
-				/* Otherwise, add the character to the
-				 * response string. */
+			
+			// If the byte is an end-of-line type character, then
+			// finish the string and inidcate we are done.
+			if((ch == '\r') || (ch == '\n') || buffer_index >= (COMMAND_MAX_STRING_LENGTH-2) ){
+				command[buffer_index] = '\n';
+				command[buffer_index+1] = '\0';
+				continue_read = 0;
 			}
-			else {
-				str[curr_char++] = ch;
+			else{
+				command[buffer_index++] = ch;
+				
+				// Disaply the char immediately for better user experience 
+				write(fdout, &ch, 1);
 			}
-		} while (!done);
+		}
 
-		/* Once we are done building the response string, queue the
-		 * response to be sent to the RS232 port.
-		 */
-		write(fdout, str, curr_char+1+1);
+		// Reset cursor to next line head
+		write(fdout, TERMINAL_RESET_CURSOR, 2);
+
+		_parse_and_process_command(command);
+
 	}
 }
 
-void first()
+void system_services()
 {
 	setpriority(0, 0);
 
+	//TODO : Check wheather these functinos are necessary
 	if (!fork()) setpriority(0, 0), pathserver();
 	if (!fork()) setpriority(0, 0), serialout(USART2, USART2_IRQn);
 	if (!fork()) setpriority(0, 0), serialin(USART2, USART2_IRQn);
 	if (!fork()) rs232_xmit_msg_task();
-	if (!fork()) setpriority(0, PRIORITY_DEFAULT - 10), queue_str_task1();
-	if (!fork()) setpriority(0, PRIORITY_DEFAULT - 10), queue_str_task2();
-	if (!fork()) setpriority(0, PRIORITY_DEFAULT - 10), serial_readwrite_task();
+
+	//TODO : Revise and init a task structure for this procedure 
+	if (!fork()) setpriority(0, PRIORITY_DEFAULT - 10), terminal_task();
 
 	setpriority(0, PRIORITY_LIMIT);
 
@@ -685,7 +714,7 @@ int main()
 	init_rs232();
 	__enable_irq();
 
-	tasks[task_count].stack = (void*)init_task(stacks[task_count], &first);
+	tasks[task_count].stack = (void*)init_task(stacks[task_count], &system_services);
 	tasks[task_count].pid = 0;
 	tasks[task_count].priority = PRIORITY_DEFAULT;
 	task_count++;
