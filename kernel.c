@@ -306,34 +306,20 @@ void _parse_and_process_command(char* command)
 
 	arguments = command;
 	while(*arguments != ' ' && *arguments != '\n'){
-		/*if(*arguments == ' ')
-		{
-			*arguments = '\0';
-			write(fdout, "read space\n\r", 12);
-			break;
-		}
-		else if( *arguments == '\0')
-		{
-			write(fdout, "read null\n\r", 11);
-			break;
-		}*/
 		++arguments;
 	}
 	*arguments = '\0'; // saperate the command and arguments
 	++arguments; // point to correct position
 
-	if(strcmp(command, "echo") == 0)
-	{
-		  write(fdout, arguments, strlen(arguments));
-		  write(fdout, "\r", 1);
+	if(!strcmp(command, "echo")){
+		write(fdout, arguments, strlen(arguments));
+		write(fdout, "\r", 1);
 	}
-	else if(strcmp(command, "hello") == 0)
-	{
-		  write(fdout, STRING_HELLO, strlen(STRING_HELLO));
+	else if(!strcmp(command, "hello")){
+		write(fdout, STRING_HELLO, strlen(STRING_HELLO));
 	}
-	else
-	{
-		  write(fdout, STRING_INVALID_COMMAND, strlen(STRING_INVALID_COMMAND));
+	else{
+		write(fdout, STRING_INVALID_COMMAND, strlen(STRING_INVALID_COMMAND));
 	}
 
 	//TODO : can not reference close
