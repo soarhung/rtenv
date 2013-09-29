@@ -242,30 +242,6 @@ void serialin(USART_TypeDef* uart, unsigned int intr)
 		}
 	}
 }
-/*
-void greeting()
-{
-	int fdout = open("/dev/tty0/out", 0);
-	char *string = "Hello, World!\n";
-	while (*string) {
-		write(fdout, string, 1);
-		string++;
-	}
-}
-
-void echo()
-{
-	int fdout, fdin;
-	char c;
-	fdout = open("/dev/tty0/out", 0);
-	fdin = open("/dev/tty0/in", 0);
-
-	while (1) {
-		read(fdin, &c, 1);
-		write(fdout, &c, 1);
-	}
-}
-*/
 
 void rs232_xmit_msg_task()
 {
@@ -291,16 +267,26 @@ void rs232_xmit_msg_task()
 	}
 }
 
+// global structure
+struct task_control_block tasks[8];
+
+// lib from print.c 
+extern void init_printf();
+extern int printf(const char *format, ...);
+
 #define COMMAND_MAX_STRING_LENGTH (128)
 #define TERMINAL_PREFIX ("$")
 #define TERMINAL_RESET_CURSOR ("\n\r")
 #define STRING_HELLO ("Hello World\n\r")
 #define STRING_INVALID_COMMAND ("Error. Invalid command\n\r")
+#define STRING_PS_TITLE ("Pid     Status     Priority\n\r")
 
 void _parse_and_process_command(char* command)
 {
 	int fdout;
 	char *arguments;
+	int task_iterator;
+	char output_buffer[32];
 
 	fdout = open("/dev/tty0/out", 0);
 
@@ -317,6 +303,13 @@ void _parse_and_process_command(char* command)
 	}
 	else if(!strcmp(command, "hello")){
 		write(fdout, STRING_HELLO, strlen(STRING_HELLO));
+	}
+	else if(!strcmp(command, "ps")){
+		init_printf();
+		write(fdout, STRING_PS_TITLE, strlen(STRING_PS_TITLE));
+		for(task_iterator = 0; task_iterator != 8; ++task_iterator){
+			printf("%3d     %6d     %8d\n\r", tasks[task_iterator].pid, tasks[task_iterator].status, tasks[task_iterator].priority);
+	 	}
 	}
 	else{
 		write(fdout, STRING_INVALID_COMMAND, strlen(STRING_INVALID_COMMAND));
@@ -338,7 +331,7 @@ void terminal_task()
 	// is there a tty dev lock?
 	fdout = open("/dev/tty0/out", 0);
 	fdin = open("/dev/tty0/in", 0);
-	
+
 	while(1){
  		buffer_index = 0;
 		continue_read = 1;
@@ -375,6 +368,8 @@ void terminal_task()
 void system_services()
 {
 	setpriority(0, 0);
+
+	//TODO : What's our target? hard realtime system, soft realtime system, or embedded system?
 
 	//TODO : Check wheather these functinos are necessary
 	if (!fork()) setpriority(0, 0), pathserver();
@@ -684,9 +679,9 @@ _mknod(struct pipe_ringbuffer *pipe, int dev)
 int main()
 {
 	unsigned int stacks[TASK_LIMIT][STACK_SIZE];
-	struct task_control_block tasks[TASK_LIMIT];
+	//struct task_control_block tasks[TASK_LIMIT];
 	struct pipe_ringbuffer pipes[PIPE_LIMIT];
-	struct task_control_block *ready_list[PRIORITY_LIMIT + 1];  /* [0 ... 39] */
+	struct task_control_block *ready_list[PRIORITY_LIMIT + 1];  // [0 ... 39] 
 	struct task_control_block *wait_list = NULL;
 	size_t task_count = 0;
 	size_t current_task = 0;
@@ -852,3 +847,206 @@ int main()
 
 	return 0;
 }
+#if 0
+/*
+	Copyright 2001, 2002 Georges Menie (www.menie.org)
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU Lesser General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU Lesser General Public License for more details.
+
+    You should have received a copy of the GNU Lesser General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+*/
+
+/*
+	putchar is the only external dependency for this file,
+	if you have a working putchar, just remove the following
+	define. If the function should be called something else,
+	replace outbyte(c) by your own function call.
+*/
+//#define putchar(c) outbyte(c)
+
+static int fd_put_char;
+
+void init_printf()
+{
+	fd_put_char = open("/dev/tty0/out", 0);
+}
+
+static void printchar(char **str, int c)
+{
+	//extern int putchar(int c);
+	if (str) {
+		**str = c;
+		++(*str);
+	}
+	else{
+		write(fd_put_char, &c ,1);
+	}
+}
+
+#define PAD_RIGHT 1
+#define PAD_ZERO 2
+
+static int prints(char **out, const char *string, int width, int pad)
+{
+	register int pc = 0, padchar = ' ';
+
+	if (width > 0) {
+		register int len = 0;
+		register const char *ptr;
+		for (ptr = string; *ptr; ++ptr) ++len;
+		if (len >= width) width = 0;
+		else width -= len;
+		if (pad & PAD_ZERO) padchar = '0';
+	}
+	if (!(pad & PAD_RIGHT)) {
+		for ( ; width > 0; --width) {
+			printchar (out, padchar);
+			++pc;
+		}
+	}
+	for ( ; *string ; ++string) {
+		printchar (out, *string);
+		++pc;
+	}
+	for ( ; width > 0; --width) {
+		printchar (out, padchar);
+		++pc;
+	}
+
+	return pc;
+}
+
+/* the following should be enough for 32 bit int */
+#define PRINT_BUF_LEN 12
+
+static int printi(char **out, int i, int b, int sg, int width, int pad, int letbase)
+{
+	char print_buf[PRINT_BUF_LEN];
+	register char *s;
+	register int t, neg = 0, pc = 0;
+	register unsigned int u = i;
+
+	if (i == 0) {
+		print_buf[0] = '0';
+		print_buf[1] = '\0';
+		return prints (out, print_buf, width, pad);
+	}
+
+	if (sg && b == 10 && i < 0) {
+		neg = 1;
+		u = -i;
+	}
+
+	s = print_buf + PRINT_BUF_LEN-1;
+	*s = '\0';
+
+	while (u) {
+		t = u % b;
+		if( t >= 10 )
+			t += letbase - '0' - 10;
+		*--s = t + '0';
+		u /= b;
+	}
+
+	if (neg) {
+		if( width && (pad & PAD_ZERO) ) {
+			printchar (out, '-');
+			++pc;
+			--width;
+		}
+		else {
+			*--s = '-';
+		}
+	}
+
+	return pc + prints (out, s, width, pad);
+}
+
+static int print(char **out, int *varg)
+{
+	register int width, pad;
+	register int pc = 0;
+	register char *format = (char *)(*varg++);
+	char scr[2];
+
+	for (; *format != 0; ++format) {
+		if (*format == '%') {
+			++format;
+			width = pad = 0;
+			if (*format == '\0') break;
+			if (*format == '%') goto out;
+			if (*format == '-') {
+				++format;
+				pad = PAD_RIGHT;
+			}
+			while (*format == '0') {
+				++format;
+				pad |= PAD_ZERO;
+			}
+			for ( ; *format >= '0' && *format <= '9'; ++format) {
+				width *= 10;
+				width += *format - '0';
+			}
+			if( *format == 's' ) {
+				register char *s = *((char **)varg++);
+				pc += prints (out, s?s:"(null)", width, pad);
+				continue;
+			}
+			if( *format == 'd' ) {
+				pc += printi (out, *varg++, 10, 1, width, pad, 'a');
+				continue;
+			}
+			if( *format == 'x' ) {
+				pc += printi (out, *varg++, 16, 0, width, pad, 'a');
+				continue;
+			}
+			if( *format == 'X' ) {
+				pc += printi (out, *varg++, 16, 0, width, pad, 'A');
+				continue;
+			}
+			if( *format == 'u' ) {
+				pc += printi (out, *varg++, 10, 0, width, pad, 'a');
+				continue;
+			}
+			if( *format == 'c' ) {
+				/* char are converted to int then pushed on the stack */
+				scr[0] = *varg++;
+				scr[1] = '\0';
+				pc += prints (out, scr, width, pad);
+				continue;
+			}
+		}
+		else {
+		out:
+			printchar (out, *format);
+			++pc;
+		}
+	}
+	if (out) **out = '\0';
+	return pc;
+}
+
+/* assuming sizeof(void *) == sizeof(int) */
+
+int printf(const char *format, ...)
+{
+	register int *varg = (int *)(&format);
+	return print(0, varg);
+}
+
+int sprintf(char *out, const char *format, ...)
+{
+	register int *varg = (int *)(&format);
+	return print(&out, varg);
+}
+#endif
